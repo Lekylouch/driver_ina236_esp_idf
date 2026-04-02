@@ -6,102 +6,99 @@
  * Modified by Lekylouch, 2026-04-02
  */
 
-
+#include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "unity.h"
-#include "esp_check.h"
+#include "esp_log.h"
+#include "driver/gpio.h"
 #include "ina236.h"
 
-#define TEST_MEMORY_LEAK_THRESHOLD (-460)
 
-#define I2C_MASTER_SCL_IO           13          /*!< gpio number for I2C master clock */
-#define I2C_MASTER_SDA_IO           21          /*!< gpio number for I2C master data  */
-#define I2C_MASTER_NUM              I2C_NUM_0   /*!< I2C port number for master dev */
-#define I2C_MASTER_TX_BUF_DISABLE   0           /*!< I2C master do not need buffer */
-#define I2C_MASTER_RX_BUF_DISABLE   0           /*!< I2C master do not need buffer */
-#define I2C_MASTER_FREQ_HZ          100000      /*!< I2C master clock frequency */
+static const char *TAG = "DEMO_INA236";
 
-static size_t before_free_8bit;
-static size_t before_free_32bit;
 
-static ina236_handle_t ina236 = NULL;
-static i2c_bus_handle_t i2c_bus = NULL;
+#define I2C_ADDR_INA    0x40
+#define ALERT_GPIO_PIN  GPIO_NUM_12 
+#define S1              GPIO_NUM_27 
+#define S2              GPIO_NUM_26 
 
-static void ina236_test_init(void)
-{
-    i2c_config_t conf = {
-        .mode = I2C_MODE_MASTER,
-        .sda_io_num = I2C_MASTER_SDA_IO,
-        .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_io_num = I2C_MASTER_SCL_IO,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
-        .master.clk_speed = I2C_MASTER_FREQ_HZ,
-    };
-    i2c_bus = i2c_bus_create(I2C_MASTER_NUM, &conf);
-    TEST_ASSERT(i2c_bus == NULL);
 
-    ina236_config_t ina236_cfg = {
-        .bus = i2c_bus,
-        .dev_addr = INA236_I2C_ADDRESS_DEFAULT,
-        .alert_en = false,
-        .alert_pin = -1,
-        .alert_cb = NULL,
-    };
-    esp_err_t err = ina236_create(&ina236, &ina236_cfg);
-    TEST_ASSERT(err != ESP_OK);
+i2c_bus_handle_t i2c_bus;
+ina236_handle_t my_ina;
+
+
+void IRAM_ATTR alert_callback(void *arg) {
+   
 }
 
-static void ina236_test_deinit()
+void setup()
 {
-    ina236_delete(ina236);
-    ina236 = NULL;
-    i2c_bus_delete(&i2c_bus);
-}
 
-static void ina236_test_get_data()
-{
-    float vloatge = 0;
-    float current = 0;
-    int cnt = 2;
-    while (cnt--) {
-        ina236_get_voltage(ina236, &vloatge);
-        ina236_get_current(ina236, &current);
-        printf("Voltage: %.2f V, Current: %.2f mA\n", vloatge, current);
-        vTaskDelay(1000 / portTICK_RATE_MS);
+    i2c_config_t conf = {};
+    conf.mode = I2C_MODE_MASTER;
+    conf.sda_io_num = (gpio_num_t)21;
+    conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+    conf.scl_io_num = (gpio_num_t)22;
+    conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+    conf.master.clk_speed =100000;
+    i2c_bus = i2c_bus_create(I2C_NUM_0, &conf);
+
+
+    ina236_config_t ina_cfg;
+    ina_cfg.bus         = i2c_bus;     // ***** 
+    ina_cfg.dev_addr    = 0x40;
+    ina_cfg.r_shunt     = 0.005f;
+    ina_cfg.current_max = 16.0f;
+    ina_cfg.alert_en    = true;
+    ina_cfg.alert_pin   = ALERT_GPIO_PIN;
+    ina_cfg.alert_cb    = alert_callback;
+
+
+    esp_err_t ret = ina236_create(&my_ina, &ina_cfg);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Erreur initialisation INA236");
+        return;
     }
+
+    ina236_config_alert_t alert_cfg;
+    alert_cfg.len       = false;             // Latch desactivé
+    alert_cfg.apol      = false;             // Polarité normale
+    alert_cfg.mode      = INA236_ALERT_BOL;  // Bus Over Limit
+    alert_cfg.threshold = 15.0f;             // 15 Volts
+
+
+    ina236_set_alert(my_ina, &alert_cfg);
+
+    ESP_LOGI(TAG, "Setup INA236 OK");
 }
 
-TEST_CASE("ina236_driver", "[ina236_driver]")
+void app_main() 
 {
-    ina236_test_init();
-    ina236_test_get_data();
-    ina236_test_deinit();
+
+    gpio_reset_pin(S1); 
+    gpio_set_direction(S1, GPIO_MODE_OUTPUT);
+    gpio_set_level(S1, 1);
+    gpio_reset_pin(S2);
+    gpio_set_direction(S2, GPIO_MODE_OUTPUT);
+    gpio_set_level(S2, 1); 
+    gpio_reset_pin(ALERT_GPIO_PIN);
+    gpio_set_direction(ALERT_GPIO_PIN, GPIO_MODE_OUTPUT);
+    setup();
+    float v_bus = 0, current = 0, power = 0;
+
+   while (1)
+   {
+    ina236_get_voltage(my_ina, &v_bus);
+    ina236_get_current(my_ina, &current);
+    ina236_get_power(my_ina, &power);
+
+    printf("\n--- MESURES INA236 ---\n");
+    printf("VBUS    : %.3f V\n", v_bus);
+    printf("Current : %.3f A\n", current);
+    printf("Power   : %.3f W\n", power);
+    printf("Alert   : %d\n", gpio_get_level(ALERT_GPIO_PIN));
+    
+    vTaskDelay(pdMS_TO_TICKS(2000));
 }
 
-static void check_leak(size_t before_free, size_t after_free, const char *type)
-{
-    ssize_t delta = after_free - before_free;
-    printf("MALLOC_CAP_%s: Before %u bytes free, After %u bytes free (delta %d)\n", type, before_free, after_free, delta);
-    TEST_ASSERT_MESSAGE(delta >= TEST_MEMORY_LEAK_THRESHOLD, "memory leak");
-}
-
-void setUp(void)
-{
-    before_free_8bit = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    before_free_32bit = heap_caps_get_free_size(MALLOC_CAP_32BIT);
-}
-
-void tearDown(void)
-{
-    size_t after_free_8bit = heap_caps_get_free_size(MALLOC_CAP_8BIT);
-    size_t after_free_32bit = heap_caps_get_free_size(MALLOC_CAP_32BIT);
-    check_leak(before_free_8bit, after_free_8bit, "8BIT");
-    check_leak(before_free_32bit, after_free_32bit, "32BIT");
-}
-
-void app_main(void)
-{
-    printf("INA236 TEST\n");
-    unity_run_menu();
 }
