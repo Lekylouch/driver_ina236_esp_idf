@@ -12,7 +12,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "esp_err.h"
-#include "i2c_bus.h"
+#include "driver/i2c_master.h"
 
 #ifdef __cplusplus
 
@@ -36,7 +36,7 @@ typedef enum {
 
 
 typedef struct {
-    i2c_bus_handle_t bus;
+    i2c_master_bus_handle_t bus;
     uint8_t dev_addr;
     float r_shunt;        // Valeur en Ohms (ex: 0.1)
     float current_max;    // Courant max attendu en Ampères

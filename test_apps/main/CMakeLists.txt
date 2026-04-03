@@ -1,3 +1,2 @@
-idf_component_register(SRC_DIRS "."
-                       PRIV_INCLUDE_DIRS "."
-                       PRIV_REQUIRES unity ina236)
+idf_component_register(SRCS "example.c"
+                       REQUIRES ina236)
